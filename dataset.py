@@ -3,6 +3,7 @@ from pathlib import Path
 from PIL import Image
 from joblib import Parallel, delayed
 
+
 class Repeat(Dataset):
     def __init__(self, org_dataset, new_length):
         self.org_dataset = org_dataset
@@ -14,6 +15,7 @@ class Repeat(Dataset):
 
     def __getitem__(self, idx):
         return self.org_dataset[idx % self.org_length]
+
 
 class MVTecAT(Dataset):
     """MVTec anomaly detection dataset.
@@ -33,19 +35,21 @@ class MVTecAT(Dataset):
         self.transform = transform
         self.mode = mode
         self.size = size
-        
+
         # find test images
         if self.mode == "train":
             self.image_names = list((self.root_dir / defect_name / "train" / "good").glob("*.png"))
             print("loading images")
             # during training we cache the smaller images for performance reasons (not a good coding style)
-            #self.imgs = [Image.open(file).resize((size,size)).convert("RGB") for file in self.image_names]
-            self.imgs = Parallel(n_jobs=10)(delayed(lambda file: Image.open(file).resize((size,size)).convert("RGB"))(file) for file in self.image_names)
+            # self.imgs = [Image.open(file).resize((size,size)).convert("RGB") for file in self.image_names]
+            self.imgs = Parallel(n_jobs=10)(
+                delayed(lambda file: Image.open(file).resize((size, size)).convert("RGB"))(file) for file in
+                self.image_names)
             print(f"loaded {len(self.imgs)} images")
         else:
-            #test mode
+            # test mode
             self.image_names = list((self.root_dir / defect_name / "test").glob(str(Path("*") / "*.png")))
-            
+
     def __len__(self):
         return len(self.image_names)
 
@@ -61,7 +65,7 @@ class MVTecAT(Dataset):
             filename = self.image_names[idx]
             label = filename.parts[-2]
             img = Image.open(filename)
-            img = img.resize((self.size,self.size)).convert("RGB")
+            img = img.resize((self.size, self.size)).convert("RGB")
             if self.transform is not None:
                 img = self.transform(img)
             return img, label != "good"

@@ -4,15 +4,15 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 import torch
 from dataset import MVTecAT
-from cutpaste import CutPaste
+# from cutpaste import CutPaste
 from model import ProjectionNet
 import matplotlib.pyplot as plt
 import argparse
 from pathlib import Path
 from cutpaste import CutPaste, cut_paste_collate_fn
 from sklearn.utils import shuffle
-from sklearn.model_selection import GridSearchCV
-import numpy as np
+# from sklearn.model_selection import GridSearchCV
+# import numpy as np
 from collections import defaultdict
 from density import GaussianDensitySklearn, GaussianDensityTorch
 import pandas as pd
