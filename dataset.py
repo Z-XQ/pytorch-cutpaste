@@ -38,17 +38,26 @@ class MVTecAT(Dataset):
 
         # find test images
         if self.mode == "train":
-            self.image_names = list((self.root_dir / defect_name / "train" / "good").glob("*.png"))
-            print("loading images")
+            image_extensions = ['*.png', '*.jpg', '*.jpeg', '*.bmp']
+            image_paths = []
+            for ext in image_extensions:
+                image_paths.extend((self.root_dir / self.defect_name / "train" / "good").glob(ext))
+            self.image_names = list(image_paths)
+            # self.image_names = list((self.root_dir / defect_name / "train" / "good").glob("*.png"))
+            print("loading train images", len(self.image_names))
             # during training we cache the smaller images for performance reasons (not a good coding style)
-            # self.imgs = [Image.open(file).resize((size,size)).convert("RGB") for file in self.image_names]
-            self.imgs = Parallel(n_jobs=10)(
-                delayed(lambda file: Image.open(file).resize((size, size)).convert("RGB"))(file) for file in
-                self.image_names)
+            self.imgs = [Image.open(file).resize((size,size)).convert("RGB") for file in self.image_names]
             print(f"loaded {len(self.imgs)} images")
         else:
             # test mode
-            self.image_names = list((self.root_dir / defect_name / "test").glob(str(Path("*") / "*.png")))
+            # self.image_names = list((self.root_dir / defect_name / "test").glob(str(Path("*") / "*.png")))
+            image_extensions = ['*.png', '*.jpg', '*.jpeg', '*.bmp']
+            image_paths = []
+            for ext in image_extensions:
+                # self.image_names = list((self.root_dir / defect_name / "test").glob(str(Path("*") / ext)))
+                image_paths.extend((self.root_dir / self.defect_name / "test").glob(str(Path("*") / ext)))
+            self.image_names = list(image_paths)
+            print("loading test images", len(self.image_names))
 
     def __len__(self):
         return len(self.image_names)

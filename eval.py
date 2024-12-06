@@ -21,13 +21,15 @@ from utils import str2bool
 test_data_eval = None
 test_transform = None
 cached_type = None
+import tensorboard
 
-def get_train_embeds(model, size, defect_type, transform, device):
+
+def get_train_embeds(dataset_path, model, size, defect_type, transform, device):
     # train data / train kde
-    test_data = MVTecAT("Data", defect_type, size, transform=transform, mode="train")
+    test_data = MVTecAT(dataset_path, defect_type, size, transform=transform, mode="train")
 
     dataloader_train = DataLoader(test_data, batch_size=64,
-                            shuffle=False, num_workers=0)
+                                  shuffle=False, num_workers=0)
     train_embed = []
     with torch.no_grad():
         for x in dataloader_train:
@@ -37,27 +39,30 @@ def get_train_embeds(model, size, defect_type, transform, device):
     train_embed = torch.cat(train_embed)
     return train_embed
 
-def eval_model(modelname, defect_type, device="cpu", save_plots=False, size=256, show_training_data=True, model=None, train_embed=None, head_layer=8, density=GaussianDensityTorch()):
+
+def eval_model(dataset_path, modelname, defect_type, device="cpu", save_plots=False, size=256, show_training_data=True, model=None,
+               train_embed=None, head_layer=8, density=GaussianDensityTorch()):
     # create test dataset
-    global test_data_eval,test_transform, cached_type
+    global test_data_eval, test_transform, cached_type
 
     # TODO: cache is only nice during training. do we need it?
     if test_data_eval is None or cached_type != defect_type:
         cached_type = defect_type
         test_transform = transforms.Compose([])
-        test_transform.transforms.append(transforms.Resize((size,size)))
+        test_transform.transforms.append(transforms.Resize((size, size)))
         test_transform.transforms.append(transforms.ToTensor())
         test_transform.transforms.append(transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                            std=[0.229, 0.224, 0.225]))
-        test_data_eval = MVTecAT("Data", defect_type, size, transform = test_transform, mode="test")
+                                                              std=[0.229, 0.224, 0.225]))
+        test_data_eval = MVTecAT(dataset_path, defect_type, size, transform=test_transform,
+                                 mode="test")
 
     dataloader_test = DataLoader(test_data_eval, batch_size=64,
-                                    shuffle=False, num_workers=0)
+                                 shuffle=False, num_workers=0)
 
-    # create model
+    # create model  加载模型并载入权重
     if model is None:
         print(f"loading model {modelname}")
-        head_layers = [512]*head_layer+[128]
+        head_layers = [512] * head_layer + [128]
         print(head_layers)
         weights = torch.load(modelname)
         classes = weights["out.weight"].shape[0]
@@ -66,36 +71,36 @@ def eval_model(modelname, defect_type, device="cpu", save_plots=False, size=256,
         model.to(device)
         model.eval()
 
-    #get embeddings for test data
+    # get embeddings for test data
     labels = []
     embeds = []
     with torch.no_grad():
         for x, label in dataloader_test:
             embed, logit = model(x.to(device))
 
-            # save 
-            embeds.append(embed.cpu())
-            labels.append(label.cpu())
-    labels = torch.cat(labels)
-    embeds = torch.cat(embeds)
+            # save
+            embeds.append(embed.cpu())  # embed(64,512)是resnet18输出的特征
+            labels.append(label.cpu())  # label(64,)是标注，0/1
+    labels = torch.cat(labels)  # （image_num,)
+    embeds = torch.cat(embeds)  # (image_num,512)
 
-    if train_embed is None:
-        train_embed = get_train_embeds(model, size, defect_type, test_transform, device)
+    if train_embed is None:  # 计算并记载训练集的embed
+        train_embed = get_train_embeds(dataset_path, model, size, defect_type, test_transform, device)
 
-    # norm embeds
-    embeds = torch.nn.functional.normalize(embeds, p=2, dim=1)
-    train_embed = torch.nn.functional.normalize(train_embed, p=2, dim=1)
+    # norm embeds 测试集，训练集
+    embeds = torch.nn.functional.normalize(embeds, p=2, dim=1)   # (test_image_num,512)
+    train_embed = torch.nn.functional.normalize(train_embed, p=2, dim=1)  # (image_image_num,512)
 
-    #create eval plot dir
+    # create eval plot dir
     if save_plots:
         eval_dir = Path("eval") / modelname
         eval_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # plot tsne
         # also show some of the training data
         show_training_data = False
         if show_training_data:
-            #augmentation setting
+            # augmentation setting
             # TODO: do all of this in a separate function that we can call in training and evaluation.
             #       very ugly to just copy the code lol
             min_scale = 0.5
@@ -107,28 +112,29 @@ def eval_model(modelname, defect_type, device="cpu", save_plots=False, size=256,
                                                                             std=[0.229, 0.224, 0.225]))
 
             train_transform = transforms.Compose([])
-            #train_transform.transforms.append(transforms.RandomResizedCrop(size, scale=(min_scale,1)))
-            #train_transform.transforms.append(transforms.GaussianBlur(int(size/10), sigma=(0.1,2.0)))
+            # train_transform.transforms.append(transforms.RandomResizedCrop(size, scale=(min_scale,1)))
+            # train_transform.transforms.append(transforms.GaussianBlur(int(size/10), sigma=(0.1,2.0)))
             train_transform.transforms.append(CutPaste(transform=after_cutpaste_transform))
             # train_transform.transforms.append(transforms.ToTensor())
 
-            train_data = MVTecAT("Data", defect_type, transform=train_transform, size=size)
+            train_data = MVTecAT(dataset_path, defect_type, transform=train_transform,
+                                 size=size)
             dataloader_train = DataLoader(train_data, batch_size=32,
-                        shuffle=True, num_workers=8, collate_fn=cut_paste_collate_fn,
-                        persistent_workers=True)
+                                          shuffle=True, num_workers=8, collate_fn=cut_paste_collate_fn,
+                                          persistent_workers=True)
             # inference training data
             train_labels = []
             train_embeds = []
             with torch.no_grad():
                 for x1, x2 in dataloader_train:
-                    x = torch.cat([x1,x2], axis=0)
+                    x = torch.cat([x1, x2], axis=0)
                     embed, logit = model(x.to(device))
 
                     # generate labels:
                     y = torch.tensor([0, 1])
                     y = y.repeat_interleave(x1.size(0))
 
-                    # save 
+                    # save
                     train_embeds.append(embed.cpu())
                     train_labels.append(y)
                     # only less data
@@ -145,29 +151,27 @@ def eval_model(modelname, defect_type, device="cpu", save_plots=False, size=256,
         plot_tsne(tsne_labels, tsne_embeds, eval_dir / "tsne.png")
     else:
         eval_dir = Path("unused")
-    
+
     print(f"using density estimation {density.__class__.__name__}")
     density.fit(train_embed)
-    distances = density.predict(embeds)
-    #TODO: set threshold on mahalanobis distances and use "real" probabilities
+    distances = density.predict(embeds)  # (image_num,)
+    # TODO: set threshold on mahalanobis distances and use "real" probabilities
 
     roc_auc = plot_roc(labels, distances, eval_dir / "roc_plot.png", modelname=modelname, save_plots=save_plots)
-    
 
     return roc_auc
-    
+
 
 def plot_roc(labels, scores, filename, modelname="", save_plots=False):
-
     fpr, tpr, _ = roc_curve(labels, scores)
     roc_auc = auc(fpr, tpr)
 
-    #plot roc
+    # plot roc
     if save_plots:
         plt.figure()
         lw = 2
         plt.plot(fpr, tpr, color='darkorange',
-                lw=lw, label='ROC curve (area = %0.2f)' % roc_auc)
+                 lw=lw, label='ROC curve (area = %0.2f)' % roc_auc)
         plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
@@ -181,63 +185,87 @@ def plot_roc(labels, scores, filename, modelname="", save_plots=False):
 
     return roc_auc
 
-def plot_tsne(labels, embeds, filename):
-    tsne = TSNE(n_components=2, verbose=1, perplexity=30, n_iter=500)
-    embeds, labels = shuffle(embeds, labels)
-    tsne_results = tsne.fit_transform(embeds)
-    fig, ax = plt.subplots(1)
-    colormap = ["b", "r", "c", "y"]
 
-    ax.scatter(tsne_results[:,0], tsne_results[:,1], color=[colormap[l] for l in labels])
+def plot_tsne(labels, embeds, filename):
+    """
+    可视化特征分布
+    embeds: (image_num,512). torch.float32
+    labels: (image_num,). torch.bool。控制绘制类别颜色，如果只是绘制特征的空间分布位置，则不要label
+    """
+    # 初始化t-SNE模型
+    """
+    n_components: 指定降维后的维度数量
+    verbose: 控制算法运行时输出的信息量。设置为1时，会打印出算法的迭代过程等信息；设置为0则不会打印任何信息。
+    perplexity: 这个参数可以被看作是每个点的有效邻域大小。它平衡了局部和全局结构的权重。较小的值会使t-SNE更关注局部结构，
+    而较大的值则更倾向于保留全局结构。通常在5到50之间选择一个合适的值，但这个最佳值可能依赖于数据集的具体情况。
+    n_iter: t-SNE算法的迭代次数。更多的迭代次数可能会导致更好的结果，但也会增加计算时间。通常，推荐至少设置250次以上的迭代以获得可靠的结果。
+    """
+    tsne = TSNE(n_components=2, verbose=1, perplexity=30, n_iter=500)
+    # 打乱嵌入向量和标签
+    # 打乱数据可以确保输入到t-SNE中的数据是随机的，这样可以避免由于数据顺序导致的任何潜在偏差。
+    # 打乱数据可以帮助确保每次运行时的初始状态是相同的。
+    embeds, labels = shuffle(embeds, labels)
+    # 将(image_num,512)降为到(image_num,2)
+    tsne_results = tsne.fit_transform(embeds)
+
+    # 创建图形
+    fig, ax = plt.subplots(1)
+    colormap = ["b", "r", "c", "y"]  # 传入label的意义就是绘制时，label为1，则绘制点为红色，为0则是蓝色。
+
+    # 绘制散点图
+    ax.scatter(x=tsne_results[:, 0], y=tsne_results[:, 1], color=[colormap[l] for l in labels])
     fig.savefig(filename)
     plt.close()
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='eval models')
     parser.add_argument('--type', default="all",
                         help='MVTec defection dataset type to train seperated by , (default: "all": train all defect types)')
 
+    parser.add_argument('--dataset_path', default="",
+                        help='train dataset path , (default: "")')
+
     parser.add_argument('--model_dir', default="models",
-                    help=' directory contating models to evaluate (default: models)')
-    
+                        help=' directory contating models to evaluate (default: models)')
+
     parser.add_argument('--cuda', default=False, type=str2bool,
-                    help='use cuda for model predictions (default: False)')
+                        help='use cuda for model predictions (default: False)')
 
     parser.add_argument('--head_layer', default=8, type=int,
-                    help='number of layers in the projection head (default: 8)')
+                        help='number of layers in the projection head (default: 8)')
 
     parser.add_argument('--density', default="torch", choices=["torch", "sklearn"],
-                    help='density implementation to use. See `density.py` for both implementations. (default: torch)')
+                        help='density implementation to use. See `density.py` for both implementations. (default: torch)')
 
     parser.add_argument('--save_plots', default=True, type=str2bool,
-                    help='save TSNE and roc plots')
-    
+                        help='save TSNE and roc plots')
 
     args = parser.parse_args()
 
     args = parser.parse_args()
     print(args)
     all_types = ['bottle',
-             'cable',
-             'capsule',
-             'carpet',
-             'grid',
-             'hazelnut',
-             'leather',
-             'metal_nut',
-             'pill',
-             'screw',
-             'tile',
-             'toothbrush',
-             'transistor',
-             'wood',
-             'zipper']
-    
+                 'cable',
+                 'capsule',
+                 'carpet',
+                 'grid',
+                 'hazelnut',
+                 'leather',
+                 'metal_nut',
+                 'pill',
+                 'screw',
+                 'tile',
+                 'toothbrush',
+                 'transistor',
+                 'wood',
+                 'zipper']
+
     if args.type == "all":
         types = all_types
     else:
         types = args.type.split(",")
-    
+
     device = "cuda" if args.cuda else "cpu"
 
     density_mapping = {
@@ -247,7 +275,8 @@ if __name__ == '__main__':
     density = density_mapping[args.density]
 
     # find models
-    model_names = [list(Path(args.model_dir).glob(f"model-{data_type}*"))[0] for data_type in types if len(list(Path(args.model_dir).glob(f"model-{data_type}*"))) > 0]
+    model_names = [list(Path(args.model_dir).glob(f"model-{data_type}*"))[0] for data_type in types if
+                   len(list(Path(args.model_dir).glob(f"model-{data_type}*"))) > 0]
     if len(model_names) < len(all_types):
         print("warning: not all types present in folder")
 
@@ -255,11 +284,13 @@ if __name__ == '__main__':
     for model_name, data_type in zip(model_names, types):
         print(f"evaluating {data_type}")
 
-        roc_auc = eval_model(model_name, data_type, save_plots=args.save_plots, device=device, head_layer=args.head_layer, density=density())
+        roc_auc = eval_model(model_name, data_type, save_plots=args.save_plots, device=device,
+                             head_layer=args.head_layer, density=density())
+
         print(f"{data_type} AUC: {roc_auc}")
         obj["defect_type"].append(data_type)
         obj["roc_auc"].append(roc_auc)
-    
+
     # save pandas dataframe
     eval_dir = Path("eval") / args.model_dir
     eval_dir.mkdir(parents=True, exist_ok=True)
